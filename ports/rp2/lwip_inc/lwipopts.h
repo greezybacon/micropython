@@ -35,6 +35,8 @@
 #define LWIP_MDNS_RESPONDER             1
 #define LWIP_IGMP                       1
 
+#define LWIP_AUTOIP 1
+
 #define LWIP_NUM_NETIF_CLIENT_DATA      LWIP_MDNS_RESPONDER
 #define MEMP_NUM_UDP_PCB                (4 + LWIP_MDNS_RESPONDER)
 #define MEMP_NUM_SYS_TIMEOUT            (LWIP_NUM_SYS_TIMEOUT_INTERNAL + LWIP_MDNS_RESPONDER)

@@ -37,6 +37,7 @@
 #if MICROPY_PY_NETWORK
 
 #if MICROPY_PY_LWIP
+#include "lwip/autoip.h"
 #include "lwip/netif.h"
 #include "lwip/timeouts.h"
 #include "lwip/dns.h"
@@ -131,6 +132,11 @@ mp_obj_t mod_network_nic_ifconfig(struct netif *netif, size_t n_args, const mp_o
             dhcp_renew(netif);
         } else {
             dhcp_stop(netif);
+#if LWIP_AUTOIP
+            if (autoip_supplied_address(netif)) {
+                autoip_stop(netif);
+            }
+#endif
             dhcp_start(netif);
         }
 
@@ -148,15 +154,28 @@ mp_obj_t mod_network_nic_ifconfig(struct netif *netif, size_t n_args, const mp_o
         // Release and stop any existing DHCP
         dhcp_release(netif);
         dhcp_stop(netif);
-        // Set static IP addresses
-        mp_obj_t *items;
-        mp_obj_get_array_fixed_n(args[0], 4, &items);
-        netutils_parse_ipv4_addr(items[0], (uint8_t *)&netif->ip_addr, NETUTILS_BIG);
-        netutils_parse_ipv4_addr(items[1], (uint8_t *)&netif->netmask, NETUTILS_BIG);
-        netutils_parse_ipv4_addr(items[2], (uint8_t *)&netif->gw, NETUTILS_BIG);
-        ip_addr_t dns;
-        netutils_parse_ipv4_addr(items[3], (uint8_t *)&dns, NETUTILS_BIG);
-        dns_setserver(0, &dns);
+#if LWIP_AUTOIP
+        if (autoip_supplied_address(netif)) {
+            autoip_stop(netif);
+        }
+#endif
+        if (args[0] == MP_OBJ_NEW_QSTR(MP_QSTR_autoip)) {
+#if LWIP_AUTOIP
+            autoip_start(netif);
+#else
+            mp_raise_msg(&mp_type_NotImplementedError, MP_ERROR_TEXT("not implemented for NIC"));
+#endif
+        } else {
+            // Set static IP addresses
+            mp_obj_t *items;
+            mp_obj_get_array_fixed_n(args[0], 4, &items);
+            netutils_parse_ipv4_addr(items[0], (uint8_t *)&netif->ip_addr, NETUTILS_BIG);
+            netutils_parse_ipv4_addr(items[1], (uint8_t *)&netif->netmask, NETUTILS_BIG);
+            netutils_parse_ipv4_addr(items[2], (uint8_t *)&netif->gw, NETUTILS_BIG);
+            ip_addr_t dns;
+            netutils_parse_ipv4_addr(items[3], (uint8_t *)&dns, NETUTILS_BIG);
+            dns_setserver(0, &dns);
+        }
         return mp_const_none;
     }
 }

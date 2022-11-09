@@ -122,6 +122,24 @@ parameter should be `id`.
 
         nic.ifconfig(('192.168.0.4', '255.255.255.0', '192.168.0.1', '8.8.8.8'))
 
+.. method:: AbstractNIC.ifconfig('dhcp')
+
+       Request network IP address configuration from a DHCP server on the network.
+
+       As implemented, this method will block until an address is successfully
+       leased from the DHCP server and will raise OSError if a timeout occurs.
+
+.. method:: AbstractNIC.ifconfig('autoip')
+
+       Request stateless network IP address autoconfiguration. For IPv4, the
+       adapter will choose a random address in the 169.254.0.0/16 subnet and
+       verify it does not conflict with an existing address on the network.
+
+       This is currently implemented only for the LWIP software IP stack.
+
+       As implemented, autoconfiguration will run in the background. Use a wait
+       loop before running code requring the autoconfigured address.
+
 .. method:: AbstractNIC.config('param')
             AbstractNIC.config(param=value, ...)
 

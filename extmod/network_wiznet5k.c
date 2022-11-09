@@ -58,6 +58,7 @@
 #include "shared/netutils/netutils.h"
 #include "lib/wiznet5k/Ethernet/wizchip_conf.h"
 #include "lib/wiznet5k/Ethernet/socket.h"
+#include "lwip/autoip.h"
 #include "lwip/err.h"
 #include "lwip/dns.h"
 #include "lwip/dhcp.h"
@@ -106,6 +107,7 @@ typedef struct _wiznet5k_obj_t {
     uint32_t trace_flags;
     struct netif netif;
     struct dhcp dhcp_struct;
+    struct autoip autoip;
     #else // WIZNET5K_PROVIDED_STACK
     wiz_NetInfo netinfo;
     uint8_t socket_used;
@@ -314,6 +316,7 @@ STATIC void wiznet5k_lwip_init(wiznet5k_obj_t *self) {
     self->netif.name[1] = '0';
     netif_set_default(&self->netif);
     dns_setserver(0, &ipconfig[3]);
+    autoip_set_struct(&self->netif, &self->autoip);
     dhcp_set_struct(&self->netif, &self->dhcp_struct);
     // Setting NETIF_FLAG_UP then clearing it is a workaround for dhcp_start and the
     // LWIP_DHCP_CHECK_LINK_UP option, so that the DHCP client schedules itself to
