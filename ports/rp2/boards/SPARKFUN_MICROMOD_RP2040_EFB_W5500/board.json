@@ -1,0 +1,18 @@
+{
+    "deploy": [
+        "../deploy.md"
+    ],
+    "docs": "",
+    "features": [
+        "Ethernet",
+        "Micro USB"
+    ],
+    "images": [
+        "W5500-EVB-Pico.jpg"
+    ],
+    "mcu": "rp2040",
+    "product": "SparkFun MicroMod RP2040",
+    "thumbnail": "",
+    "url": "https://www.sparkfun.com/products/17720",
+    "vendor": "SparkFun"
+}
