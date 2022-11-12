@@ -728,7 +728,11 @@ class Kernel(object):
                     # The current task runs until it suspends or terminates
                     while current:
                         try:
-                            trap = current.send(current._trap_result)
+                            res = current._trap_result
+                            if isinstance(res, BaseException):
+                                trap = current.throw(res)
+                            else:
+                                trap = current.send(res)
                         except BaseException as e:
                             # If any exception has occurred, the task is done.
                             current = None

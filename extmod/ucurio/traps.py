@@ -24,139 +24,99 @@ from select import POLLIN, POLLOUT
 
 from . import errors
 
-def _f(): pass
-FunctionType = type(_f)
-
-def coroutine(func):
-    """Convert regular generator function to a coroutine."""
-
-    if not callable(func):
-        raise TypeError('types.coroutine() expects a callable')
-
-    if func.__class__ is FunctionType:
-        co_flags = func.__code__.co_flags
-
-        # Check if 'func' is a coroutine function.
-        # (0x180 == CO_COROUTINE | CO_ITERABLE_COROUTINE)
-        if co_flags & 0x180:
-            return func
-
-        # Check if 'func' is a generator function.
-        # (0x20 == CO_GENERATOR)
-        if co_flags & 0x20:
-            # TODO: Implement this in C.
-            co = func.__code__
-            # 0x100 == CO_ITERABLE_COROUTINE
-            func.__code__ = co.replace(co_flags=co.co_flags | 0x100)
-            return func
-
-    return func
-
-    raise TypeError(f"Unsupported function type {repr(func)}")
-
-# This is the only entry point to the Curio kernel and the
-# only place where the @types.coroutine decorator is used.
-@coroutine
-def _kernel_trap(*request):
-    result = yield request
-    if isinstance(result, BaseException):
-        raise result
-    else:
-        return result
-
 # Higher-level trap functions that make use of async/await
 async def _read_wait(fileobj):
     '''
     Wait until reading can be performed.  If another task is waiting
     on the same file, a ResourceBusy exception is raised.
     '''
-    return await _kernel_trap('trap_io', fileobj, POLLIN, 'READ_WAIT')
+    return (yield ('trap_io', fileobj, POLLIN, 'READ_WAIT'))
 
 async def _write_wait(fileobj):
     '''
     Wait until writing can be performed. If another task is waiting
     to write on the same file, a ResourceBusy exception is raised.
     '''
-    return await _kernel_trap('trap_io', fileobj, POLLOUT, 'WRITE_WAIT')
+    return (yield ('trap_io', fileobj, POLLOUT, 'WRITE_WAIT'))
 
 async def _io_release(fileobj):
     '''
     Release kernel resources associated with a file
     '''
-    return await _kernel_trap('trap_io_release', fileobj)
+    return (yield ('trap_io_release', fileobj))
 
 async def _io_waiting(fileobj):
     '''
     Return a tuple (rtask, wtask) of tasks currently blocked waiting
     for I/O on fileobj.
     '''
-    return await _kernel_trap('trap_io_waiting', fileobj)
+    return (yield ('trap_io_waiting', fileobj))
 
 async def _future_wait(future, event=None):
     '''
     Wait for the result of a Future to be ready.
     '''
-    return await _kernel_trap('trap_future_wait', future, event)
+    return (yield ('trap_future_wait', future, event))
 
 async def _sleep(clock):
     '''
     Sleep until the monotonic clock reaches the specified clock value.
     If clock is 0, forces the current task to yield to the next task (if any).
     '''
-    return await _kernel_trap('trap_sleep', clock)
+    return (yield ('trap_sleep', clock))
 
 async def _spawn(coro):
     '''
     Create a new task. Returns the resulting Task object.
     '''
-    return await _kernel_trap('trap_spawn', coro)
+    return (yield ('trap_spawn', coro))
 
 async def _cancel_task(task, exc=errors.TaskCancelled, val=None):
     '''
     Cancel a task. Causes a CancelledError exception to raise in the task.
     Set the exc and val arguments to change the exception.
     '''
-    return await _kernel_trap('trap_cancel_task', task, exc, val)
+    return (yield ('trap_cancel_task', task, exc, val))
 
 async def _scheduler_wait(sched, state):
     '''
     Put the task to sleep on a scheduler primitive.
     '''
-    return await _kernel_trap('trap_sched_wait', sched, state)
+    return (yield ('trap_sched_wait', sched, state))
 
 async def _scheduler_wake(sched, n=1):
     '''
     Reschedule one or more tasks waiting on a scheduler primitive.
     '''
-    return await _kernel_trap('trap_sched_wake', sched, n)
+    return (yield ('trap_sched_wake', sched, n))
 
 async def _get_kernel():
     '''
     Get the kernel executing the task.
     '''
-    return await _kernel_trap('trap_get_kernel')
+    return (yield ('trap_get_kernel',))
 
 async def _get_current():
     '''
     Get the currently executing task
     '''
-    return await _kernel_trap('trap_get_current')
+    return (yield ('trap_get_current',))
 
 async def _set_timeout(clock):
     '''
     Set a timeout for the current task that occurs at the specified clock value.
     Setting a clock of None clears any previous timeout.
     '''
-    return await _kernel_trap('trap_set_timeout', clock)
+    return (yield ('trap_set_timeout', clock))
 
 async def _unset_timeout(previous):
     '''
     Restore the previous timeout for the current task.
     '''
-    return await _kernel_trap('trap_unset_timeout', previous)
+    return (yield ('trap_unset_timeout', previous))
 
 async def _clock():
     '''
     Return the value of the kernel clock
     '''
-    return await _kernel_trap('trap_clock')
+    return (yield ('trap_clock',))

@@ -133,7 +133,7 @@ class Task(object):
 
         # Bound coroutine methods
         self.send = self._run_coro.send   
-        self._throw = self._run_coro.throw
+        self.throw = self._run_coro.throw
         
         # Timeout deadline stack
         self._deadlines = []
