@@ -143,13 +143,9 @@ class PollSelector(BaseSelector):
             timeout = None
         elif timeout <= 0:
             timeout = 0
-        else:
-            # poll() has a resolution of 1 millisecond, round away from
-            # zero to wait *at least* timeout seconds.
-            timeout = math.ceil(timeout * 1e3)
         ready = []
         try:
-            fd_event_list = self._selector.poll(timeout)
+            fd_event_list = self._selector.ipoll(timeout)
         except OSError:
             return ready
         for fd, event in fd_event_list:

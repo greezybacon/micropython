@@ -28,21 +28,22 @@
 # can still be sorted using a priority queue in the usual way.
 
 import heapq
+import sys
 
 class TimeQueue:
-    cutoff = 1.0         # Threshhold for near/far events (seconds)
+    cutoff = 1000         # Threshhold for near/far events (seconds)
     def __init__(self):
         self.near = [ ]
         self.far = { }
         self.near_deadline = 0
-        self.far_min_deadline = float('inf')
+        self.far_min_deadline = sys.maxsize
 
     def _far_to_near(self):
         '''
         Move items from the far queue to the near queue (if any).
         '''
         removed = []
-        min_deadline = float('inf')
+        min_deadline = sys.maxsize
         for item, expires in self.far.items():
             if expires < self.near_deadline:
                 self.push(item, expires)

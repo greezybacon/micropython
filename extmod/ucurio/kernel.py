@@ -204,7 +204,7 @@ class Kernel(object):
 
         ready_popleft = ready.popleft
         ready_append = ready.append
-        time_monotonic = lambda: time.ticks_ms() / 1000.
+        time_monotonic = time.ticks_ms
         taskcls = kernel._taskcls
 
         # ------------------------------------------------------------

@@ -29,7 +29,10 @@ async def sleep(seconds):
     makes a task immediately switch to the next ready task (if any).
     Returns the value of the kernel clock when awakened.
     '''
-    return await _sleep(seconds)
+    return await _sleep(seconds * 1000)
+
+async def sleep_ms(milliseconds):
+    return await _sleep(milliseconds)
 
 class _TimeoutAfter(object):
     '''
