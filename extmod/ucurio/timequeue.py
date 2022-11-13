@@ -108,4 +108,8 @@ class TimeQueue:
         Cancel a time event. The combination of (item, expires) should
         match a prior push() operation (but if not, it's ignored).
         '''
-        self.far.pop(item, None)
+        try:
+            if not self.far.pop(item, None):
+                self.near.remove((expires, item))
+        except ValueError:
+            pass
