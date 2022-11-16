@@ -632,7 +632,6 @@ class Kernel(object):
                 for key, mask in events:
                     rtask, wtask = key.data
                     emask = key.events
-                    intfd = isinstance(key.fileobj, int)
                     if mask & POLLIN:
                         # Discussion: If the associated fileobj is *not* a bare
                         # integer file descriptor, we keep a record of the last
@@ -646,24 +645,16 @@ class Kernel(object):
                         # without it being detected by the kernel.  For that
                         # case, its critical that we not leave the fd on the
                         # event loop.
-                        rtask._last_io = None if intfd else (key.fileobj, POLLIN)
+                        rtask._last_io = (key.fileobj, POLLIN)
                         reschedule_task(rtask)
                         emask &= ~POLLIN
                         rtask = None
 
                     if mask & POLLOUT:
-                        wtask._last_io = None if intfd else (key.fileobj, POLLOUT)
+                        wtask._last_io = (key.fileobj, POLLOUT)
                         reschedule_task(wtask)
                         emask &= ~POLLOUT
                         wtask = None
-
-                    # Unregister the task if fileobj is not an integer fd (see
-                    # note above).
-                    if intfd:
-                        if emask:
-                            selector_modify(key.fileobj, emask, (rtask, wtask))
-                        else:
-                            selector_unregister(key.fileobj)
 
 
                 # ------------------------------------------------------------
