@@ -92,9 +92,6 @@ class Kernel(object):
         # Coroutine runner function (created upon first call to run())
         self._runner = None
 
-        # Activations
-        self._activations = activations if activations else []
-
         # Debugging (activations in disguise)
         if debug:
             raise NotImplementedError()
@@ -192,7 +189,6 @@ class Kernel(object):
         tasks = kernel._tasks                   # Task table
         sleepq = TimeQueue()                    # Sleeping task queue
         wake_queue = deque(tuple(), 5)          # Thread wake queue
-        _activations = []
 
         # ---- Bound methods
         selector_register = selector.register
@@ -278,8 +274,6 @@ class Kernel(object):
             task = taskcls(coro, current)
             tasks[task.id] = task
             reschedule_task(task)
-            for a in _activations:
-                a.created(task)
             return task
 
         # Reschedule a task, putting it back on the ready queue.
@@ -603,14 +597,6 @@ class Kernel(object):
             trap_get_kernel, trap_get_current,
         )}
 
-        # Initialize activations
-        kernel._activations = _activations = \
-            [ act() if (isinstance(act, type) and issubclass(act, Activation)) else act
-                    for act in kernel._activations ]
-
-        for act in _activations:
-            act.activate(kernel)
-
         # Initialize the loopback task (if not already initialized)
         init_loopback()
         task = new_task(_kernel_task())
@@ -720,8 +706,6 @@ class Kernel(object):
 
                 for _ in range(len(ready)):
                     active = current = ready_popleft()
-                    for a in _activations:
-                        a.running(active)
                     active.state = 'RUNNING'
                     active.cycles += 1
 
@@ -776,11 +760,6 @@ class Kernel(object):
                         unregister_event(*active._last_io)
                         active._last_io = None
 
-                    # Trigger scheduler activations (if any)
-                    for a in _activations:
-                        a.suspended(active, trap)
-                        if active.terminated:
-                            a.terminated(active)
                     current = active = trap = None
 
                 # If the main task has terminated, we're done.
