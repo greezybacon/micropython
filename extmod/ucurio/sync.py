@@ -16,6 +16,8 @@ __all__ = ['Event', 'Lock', 'RLock', 'Semaphore', 'Condition', 'Result' ]
 
 from .sched import SchedFIFO, SchedBarrier
 from .task import current_task
+from .traps import _future_wait
+from .workers import Future
 
 class Event(object):
 
@@ -42,6 +44,37 @@ class Event(object):
     async def set(self):
         self._set = True
         await self._waiting.wake()
+
+class SyncEvent(object):
+    "Event that uses future so ::set can be called from an ISR context"
+    def __init__(self):
+        self._set = False
+        self._waiting = list()
+
+    def __repr__(self):
+        res = super().__repr__()
+        extra = 'set' if self._set else 'unset'
+        return f'<{res[1:-1]} [{extra},waiters:{len(self._waiting)}]>'
+
+    def is_set(self):
+        return self._set
+
+    def clear(self):
+        self._set = False
+
+    async def wait(self):
+        if self._set:
+            return
+        fut = Future()
+        self._waiting.append(fut)
+        await _future_wait(fut)
+
+    def set(self):
+        self._set = True
+        were_waiting = self._waiting.copy()
+        self._waiting = list()
+        for w in were_waiting:
+            w.set_result(None)
 
 # Base class for all synchronization primitives that operate as context managers.
 

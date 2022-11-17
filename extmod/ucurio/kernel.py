@@ -210,15 +210,13 @@ class Kernel(object):
         # awake for non-I/O events.
 
         # Loop-back sockets
-        notify_sock = None
-        wait_sock = None
+        notify_event = None
 
         async def _kernel_task():
-            return
             wake_queue_popleft = wake_queue.popleft
             while True:
-                await _read_wait(wait_sock)
-                data = wait_sock.recv(1000)
+                await notify_event.wait()
+                notify_event.clear()
 
                 # Process any waking tasks.  These are tasks that have
                 # been awakened externally to the event loop (e.g., by
@@ -254,16 +252,11 @@ class Kernel(object):
             if task:
                 wake_queue.append((task, future))
         
-            notify_sock.send(b'\x00')
+            notify_event.set()
 
         def init_loopback():
-            return
-        #    nonlocal notify_sock, wait_sock
-        #    notify_sock, wait_sock = socket.socketpair()
-        #    wait_sock.setblocking(False)
-        #    notify_sock.setblocking(False)
-        #    kernel._call_at_shutdown(notify_sock.close)
-        #    kernel._call_at_shutdown(wait_sock.close)
+            nonlocal notify_event
+            notify_event = SyncEvent()
 
         # ------------------------------------------------------------
         # Task management functions.
@@ -599,8 +592,8 @@ class Kernel(object):
 
         # Initialize the loopback task (if not already initialized)
         init_loopback()
-        task = new_task(_kernel_task())
-        task.daemon = True
+        ktask = new_task(_kernel_task())
+        ktask.daemon = True
 
         # ------------------------------------------------------------
         # Main Kernel Loop.  Runs the supplied coroutine until it
@@ -690,6 +683,9 @@ class Kernel(object):
                     # mark it as pending cancellation
                     else:
                         task.cancel_pending = TaskTimeout(current_time)
+
+                if len(wake_queue):
+                    reschedule_task(ktask)
 
                 # ------------------------------------------------------------
                 # Run ready tasks

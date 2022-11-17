@@ -4,7 +4,7 @@
 # running functions in threads, processes, and executors from the
 # concurrent.futures module.
 
-__all__ = ['run_in_executor', 'run_in_thread']
+__all__ = ['run_in_executor', 'run_in_thread', 'Future']
 
 # -- Standard Library
 
@@ -128,6 +128,10 @@ class _FutureLess(object):
 
     def cancel(self):
         pass
+
+class Future(_FutureLess):
+    async def __anext__(self):
+        return await _future_wait(self)
 
 # A ThreadWorker represents a thread that performs work on behalf of a
 # curio task.   A curio task initiates work by executing the
