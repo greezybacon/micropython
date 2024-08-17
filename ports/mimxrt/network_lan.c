@@ -156,6 +156,10 @@ static mp_obj_t network_lan_active(size_t n_args, const mp_obj_t *args) {
         int ret;
         if (mp_obj_is_true(args[1])) {
             ret = eth_start(self->eth);
+            #if LWIP_MDNS_RESPONDER
+            mdns_resp_restart(self->eth);
+            mdns_resp_rename_netif(self->eth, mod_network_hostname_data);
+            #endif
         } else {
             ret = eth_stop(self->eth);
         }

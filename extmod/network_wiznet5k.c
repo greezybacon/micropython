@@ -61,6 +61,7 @@
 #include "lwip/err.h"
 #include "lwip/dns.h"
 #include "lwip/dhcp.h"
+#include "lwip/apps/mdns.h"
 #include "netif/etharp.h"
 
 #define TRACE_ETH_TX (0x0002)
@@ -850,6 +851,10 @@ static mp_obj_t wiznet5k_active(size_t n_args, const mp_obj_t *args) {
                 // seems we need a small delay after init
                 mp_hal_delay_ms(250);
 
+                #if LWIP_MDNS_RESPONDER
+                mdns_resp_restart(&self->netif);
+                mdns_resp_rename_netif(&self->netif, mod_network_hostname_data);
+                #endif
             }
         } else {
             #if WIZNET5K_WITH_LWIP_STACK
