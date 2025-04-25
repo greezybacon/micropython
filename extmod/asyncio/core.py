@@ -2,6 +2,7 @@
 # MIT license; Copyright (c) 2019 Damien P. George
 
 from time import ticks_ms as ticks, ticks_diff, ticks_add
+from select import POLLIN, POLLOUT
 import sys, select
 
 # Import TaskQueue and Task, preferring built-in C code over Python code
@@ -9,6 +10,11 @@ try:
     from _asyncio import TaskQueue, Task
 except:
     from .task import TaskQueue, Task
+
+try:
+    from _thread import get_ident
+except:
+    get_ident = lambda: 0
 
 
 ################################################################################
@@ -42,7 +48,8 @@ class SingletonGenerator:
 
     def __next__(self):
         if self.state is not None:
-            _task_queue.push(cur_task, self.state)
+            loop = get_event_loop()
+            loop._task_queue.push(loop.cur_task, self.state)
             self.state = None
             return None
         else:
@@ -68,22 +75,25 @@ def sleep(t):
 
 
 class IOQueue:
-    def __init__(self):
+    def __init__(self, loop: 'Loop'):
         self.poller = select.poll()
+        self.loop = loop
         self.map = {}  # maps id(stream) to [task_waiting_read, task_waiting_write, stream]
 
     def _enqueue(self, s, idx):
-        if id(s) not in self.map:
+        cur_task = self.loop.cur_task
+        id_s = id(s)
+        if id_s not in self.map:
             entry = [None, None, s]
             entry[idx] = cur_task
-            self.map[id(s)] = entry
-            self.poller.register(s, select.POLLIN if idx == 0 else select.POLLOUT)
+            self.map[id_s] = entry
+            self.poller.register(s, POLLIN if idx == 0 else POLLOUT)
         else:
-            sm = self.map[id(s)]
+            sm = self.map[id_s]
             assert sm[idx] is None
             assert sm[1 - idx] is not None
             sm[idx] = cur_task
-            self.poller.modify(s, select.POLLIN | select.POLLOUT)
+            self.poller.modify(s, POLLIN | POLLOUT)
         # Link task to this IOQueue so it can be removed if needed
         cur_task.data = self
 
@@ -111,23 +121,24 @@ class IOQueue:
                 break
 
     def wait_io_event(self, dt):
+        _task_queue = self.loop._task_queue
         for s, ev in self.poller.ipoll(dt):
             sm = self.map[id(s)]
             # print('poll', s, sm, ev)
-            if ev & ~select.POLLOUT and sm[0] is not None:
+            if ev & ~POLLOUT and sm[0] is not None:
                 # POLLIN or error
                 _task_queue.push(sm[0])
                 sm[0] = None
-            if ev & ~select.POLLIN and sm[1] is not None:
+            if ev & ~POLLIN and sm[1] is not None:
                 # POLLOUT or error
                 _task_queue.push(sm[1])
                 sm[1] = None
             if sm[0] is None and sm[1] is None:
                 self._dequeue(s)
             elif sm[0] is None:
-                self.poller.modify(s, select.POLLOUT)
+                self.poller.modify(s, POLLOUT)
             else:
-                self.poller.modify(s, select.POLLIN)
+                self.poller.modify(s, POLLIN)
 
 
 ################################################################################
@@ -136,21 +147,18 @@ class IOQueue:
 
 # Ensure the awaitable is a task
 def _promote_to_task(aw):
-    return aw if isinstance(aw, Task) else create_task(aw)
+    return aw if isinstance(aw, Task) else get_event_loop().create_task(aw)
 
 
 # Create and schedule a new task from a coroutine
 def create_task(coro):
-    if not hasattr(coro, "send"):
-        raise TypeError("coroutine expected")
-    t = Task(coro, globals())
-    _task_queue.push(t)
-    return t
+    return get_event_loop().create_task(coro)
 
 
 # Keep scheduling tasks until there are none left to schedule
-def run_until_complete(main_task=None):
-    global cur_task
+def _run_until_complete(loop: 'Loop', main_task=None):
+    _task_queue = loop._task_queue
+    _io_queue = loop._io_queue
     excs_all = (CancelledError, Exception)  # To prevent heap allocation in loop
     excs_stop = (CancelledError, StopIteration)  # To prevent heap allocation in loop
     while True:
@@ -164,14 +172,14 @@ def run_until_complete(main_task=None):
                 dt = max(0, ticks_diff(t.ph_key, ticks()))
             elif not _io_queue.map:
                 # No tasks can be woken so finished running
-                cur_task = None
+                loop.cur_task = None
                 return
             # print('(poll {})'.format(dt), len(_io_queue.map))
             _io_queue.wait_io_event(dt)
 
         # Get next task to run and continue it
         t = _task_queue.pop()
-        cur_task = t
+        loop.cur_task = t
         try:
             # Continue running the coroutine, it's responsible for rescheduling itself
             exc = t.data
@@ -189,7 +197,7 @@ def run_until_complete(main_task=None):
             assert t.data is None
             # This task is done, check if it's the main task and then loop should stop
             if t is main_task:
-                cur_task = None
+                loop.cur_task = None
                 if isinstance(er, StopIteration):
                     return er.value
                 raise er
@@ -228,13 +236,16 @@ def run_until_complete(main_task=None):
                 # Create exception context and call the exception handler.
                 _exc_context["exception"] = exc
                 _exc_context["future"] = t
-                Loop.call_exception_handler(_exc_context)
+                loop.call_exception_handler(_exc_context)
 
 
 # Create a new task from a coroutine and run it until it finishes
 def run(coro):
-    return run_until_complete(create_task(coro))
+    return get_event_loop().run_until_complete(create_task(coro))
 
+
+def run_until_complete(main_task=None):
+    return get_event_loop().run_until_complete(main_task)
 
 ################################################################################
 # Event loop wrapper
@@ -244,68 +255,83 @@ async def _stopper():
     pass
 
 
-cur_task = None
-_stop_task = None
+# Provide transparent access to loop-local variables to appear as module 
+# properties.
+def __getattr__(name):
+    # cur_task, _task_queue, _io_queue
+    return getattr(get_event_loop(), name)
+
 
 
 class Loop:
     _exc_handler = None
+    _stop_task = None
+    cur_task = None
 
-    def create_task(coro):
-        return create_task(coro)
+    def __init__(self):
+        self._task_queue = TaskQueue()
+        self._io_queue = IOQueue(self)
 
-    def run_forever():
-        global _stop_task
-        _stop_task = Task(_stopper(), globals())
-        run_until_complete(_stop_task)
+    def create_task(self, coro):
+        if not hasattr(coro, "send"):
+            raise TypeError("coroutine expected")
+        t = Task(coro, self, globals())
+        self._task_queue.push(t)
+        return t
+
+    def run_forever(self):
+        self._stop_task = st = Task(_stopper(), self, globals())
+        _run_until_complete(self, st)
         # TODO should keep running until .stop() is called, even if there're no tasks left
 
-    def run_until_complete(aw):
-        return run_until_complete(_promote_to_task(aw))
+    def run_until_complete(self, aw):
+        return _run_until_complete(self, _promote_to_task(aw))
 
-    def stop():
-        global _stop_task
-        if _stop_task is not None:
-            _task_queue.push(_stop_task)
+    def stop(self):
+        if self._stop_task is not None:
+            self._task_queue.push(self._stop_task)
             # If stop() is called again, do nothing
-            _stop_task = None
+            self._stop_task = None
 
-    def close():
+    def close(self):
         pass
 
-    def set_exception_handler(handler):
-        Loop._exc_handler = handler
+    def set_exception_handler(self, handler):
+        self._exc_handler = handler
 
-    def get_exception_handler():
-        return Loop._exc_handler
+    def get_exception_handler(self):
+        return self._exc_handler
 
     def default_exception_handler(loop, context):
         print(context["message"], file=sys.stderr)
         print("future:", context["future"], "coro=", context["future"].coro, file=sys.stderr)
         sys.print_exception(context["exception"], sys.stderr)
 
-    def call_exception_handler(context):
-        (Loop._exc_handler or Loop.default_exception_handler)(Loop, context)
+    def call_exception_handler(self, context):
+        (self._exc_handler or Loop.default_exception_handler)(self, context)
 
 
 # The runq_len and waitq_len arguments are for legacy uasyncio compatibility
+_loops = {}
 def get_event_loop(runq_len=0, waitq_len=0):
-    return Loop
+    ident = get_ident()
+    if ident in _loops:
+        return _loops[ident]
+
+    return new_event_loop()
 
 
 def current_task():
+    cur_task = get_event_loop().cur_task
     if cur_task is None:
         raise RuntimeError("no running event loop")
     return cur_task
 
 
 def new_event_loop():
-    global _task_queue, _io_queue
-    # TaskQueue of Task instances
-    _task_queue = TaskQueue()
-    # Task queue and poller for stream IO
-    _io_queue = IOQueue()
-    return Loop
+    loop = Loop()
+    _loops[get_ident()] = loop
+    return loop
 
 
 # Initialise default event loop

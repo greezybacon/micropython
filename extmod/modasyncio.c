@@ -45,6 +45,7 @@
 typedef struct _mp_obj_task_t {
     mp_pairheap_t pairheap;
     mp_obj_t coro;
+    mp_obj_t loop;
     mp_obj_t data;
     mp_obj_t state;
     mp_obj_t ph_key;
@@ -174,16 +175,17 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 mp_obj_t mp_asyncio_context = MP_OBJ_NULL;
 
 static mp_obj_t task_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *args) {
-    mp_arg_check_num(n_args, n_kw, 1, 2, false);
+    mp_arg_check_num(n_args, n_kw, 2, 3, false);
     mp_obj_task_t *self = m_new_obj(mp_obj_task_t);
     self->pairheap.base.type = type;
     mp_pairheap_init_node(task_lt, &self->pairheap);
     self->coro = args[0];
+    self->loop = args[1];
     self->data = mp_const_none;
     self->state = TASK_STATE_RUNNING_NOT_WAITED_ON;
     self->ph_key = MP_OBJ_NEW_SMALL_INT(0);
-    if (n_args == 2) {
-        mp_asyncio_context = args[1];
+    if (n_args == 3) {
+        mp_asyncio_context = args[2];
     }
     return MP_OBJ_FROM_PTR(self);
 }
@@ -194,6 +196,20 @@ static mp_obj_t task_done(mp_obj_t self_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(task_done_obj, task_done);
 
+static mp_obj_t task_resume(mp_obj_t self_in) {
+    mp_obj_task_t *self = MP_OBJ_TO_PTR(self_in);
+    mp_obj_t _task_queue = mp_load_attr(self->loop, MP_QSTR__task_queue);
+
+    // _task_queue.push(self)
+    mp_obj_t dest[2];
+    dest[0] = _task_queue;
+    dest[1] = MP_OBJ_FROM_PTR(self);
+    task_queue_push(2, dest);
+
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(task_resume_obj, task_resume);
+
 static mp_obj_t task_cancel(mp_obj_t self_in) {
     mp_obj_task_t *self = MP_OBJ_TO_PTR(self_in);
     // Check if task is already finished.
@@ -201,7 +217,7 @@ static mp_obj_t task_cancel(mp_obj_t self_in) {
         return mp_const_false;
     }
     // Can't cancel self (not supported yet).
-    mp_obj_t cur_task = mp_obj_dict_get(mp_asyncio_context, MP_OBJ_NEW_QSTR(MP_QSTR_cur_task));
+    mp_obj_t cur_task = mp_load_attr(self->loop, MP_QSTR_cur_task);
     if (self_in == cur_task) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("can't cancel self"));
     }
@@ -210,7 +226,7 @@ static mp_obj_t task_cancel(mp_obj_t self_in) {
         self = MP_OBJ_TO_PTR(self->data);
     }
 
-    mp_obj_t _task_queue = mp_obj_dict_get(mp_asyncio_context, MP_OBJ_NEW_QSTR(MP_QSTR__task_queue));
+    mp_obj_t _task_queue = mp_load_attr(self->loop, MP_QSTR__task_queue);
 
     // Reschedule Task as a cancelled task.
     mp_obj_t dest[3];
@@ -251,6 +267,9 @@ static void task_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest) {
             dest[0] = self->state;
         } else if (attr == MP_QSTR_done) {
             dest[0] = MP_OBJ_FROM_PTR(&task_done_obj);
+            dest[1] = self_in;
+        } else if (attr == MP_QSTR_resume) {
+            dest[0] = MP_OBJ_FROM_PTR(&task_resume_obj);
             dest[1] = self_in;
         } else if (attr == MP_QSTR_cancel) {
             dest[0] = MP_OBJ_FROM_PTR(&task_cancel_obj);
@@ -293,7 +312,7 @@ static mp_obj_t task_iternext(mp_obj_t self_in) {
         nlr_raise(self->data);
     } else {
         // Put calling task on waiting queue.
-        mp_obj_t cur_task = mp_obj_dict_get(mp_asyncio_context, MP_OBJ_NEW_QSTR(MP_QSTR_cur_task));
+        mp_obj_t cur_task = mp_load_attr(self->loop, MP_QSTR_cur_task);
         mp_obj_t args[2] = { self->state, cur_task };
         task_queue_push(2, args);
         // Set calling task's data to this task that it waits on, to double-link it.

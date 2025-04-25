@@ -154,6 +154,17 @@ class Task:
     def done(self):
         return not self.state
 
+    def resume(self):
+        _task_queue = self.loop._task_queue
+        if hasattr(self.data, "remove"):
+            # Not on the main running queue, remove the task from the queue it's on.
+            self.data.remove(self)
+            _task_queue.push(self)
+        elif core.ticks_diff(self.ph_key, core.ticks()) > 0:
+            # On the main running queue but scheduled in the future, so bring it forward to now.
+            _task_queue.remove(self)
+            _task_queue.push(self)
+
     def cancel(self):
         # Check if task is already finished.
         if not self.state:
@@ -165,13 +176,6 @@ class Task:
         while isinstance(self.data, Task):
             self = self.data
         # Reschedule Task as a cancelled task.
-        if hasattr(self.data, "remove"):
-            # Not on the main running queue, remove the task from the queue it's on.
-            self.data.remove(self)
-            core._task_queue.push(self)
-        elif core.ticks_diff(self.ph_key, core.ticks()) > 0:
-            # On the main running queue but scheduled in the future, so bring it forward to now.
-            core._task_queue.remove(self)
-            core._task_queue.push(self)
+        self.resume()
         self.data = core.CancelledError
         return True
