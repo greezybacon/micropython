@@ -32,32 +32,13 @@ _exc_context = {"message": "Task exception wasn't retrieved", "exception": None,
 # Sleep functions
 
 
-# "Yield" once, then raise StopIteration
-class SingletonGenerator:
-    def __init__(self):
-        self.state = None
-        self.exc = StopIteration()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self.state is not None:
-            _task_queue.push(cur_task, self.state)
-            self.state = None
-            return None
-        else:
-            self.exc.__traceback__ = None
-            raise self.exc
-
-
 # Pause task execution for the given time (integer in milliseconds, uPy extension)
 # Use a SingletonGenerator to do it without allocating on the heap
-def sleep_ms(t, sgen=SingletonGenerator()):
-    assert sgen.state is None
-    now = ticks()
-    sgen.state = ticks_add(now, t) if t > 0 else now
-    return sgen
+def wait_ticks(task, until):
+    _task_queue.push(task, until)
+
+def sleep_ms(t):
+    return cur_task.suspend(wait_ticks, ticks_add(ticks(), max(0, t)))
 
 
 # Pause task execution for the given time (in seconds)
@@ -78,18 +59,25 @@ class IOQueue:
 
     def _enqueue(self, s, idx):
         if id(s) not in self.map:
-            entry = [None, None, s]
+            ev = POLLIN if idx == 0 else POLLOUT
+            entry = [None, None, s, ev]
             entry[idx] = cur_task
             self.map[id(s)] = entry
-            self.poller.register(s, POLLIN if idx == 0 else POLLOUT)
+            self.poller.register(s, ev)
         else:
             sm = self.map[id(s)]
             assert sm[idx] is None
             assert sm[1 - idx] is not None
             sm[idx] = cur_task
-            self.poller.modify(s, POLLIN | POLLOUT)
+            sm[3] |= POLLIN if idx == 0 else POLLOUT
+            self.poller.modify(s, sm[3])
         # Link task to this IOQueue so it can be removed if needed
         cur_task.data = self
+
+    def _rewait(self, s, idx):
+        sm = self.map[id(s)]
+        sm[3] |= POLLIN if idx == 0 else POLLOUT
+        self.poller.modify(s, sm[3])
 
     def _dequeue(self, s):
         del self.map[id(s)]
@@ -101,11 +89,21 @@ class IOQueue:
     def queue_write(self, s):
         self._enqueue(s, 1)
 
+    def unregister(self, s, slot, remove=True):
+        sm = self.map[id(s)]
+        if remove:
+            sm[slot] = None
+            if sm[1 - slot] is None:
+                return self._dequeue(s)
+
+        sm[3] &= nPOLLIN if slot == 0 else nPOLLOUT
+        self.poller.modify(s, sm[3])
+
     def remove(self, task):
         while True:
             del_s = None
             for k in self.map:  # Iterate without allocating on the heap
-                q0, q1, s = self.map[k]
+                q0, q1, s, _ = self.map[k]
                 if q0 is task or q1 is task:
                     del_s = s
                     break
@@ -120,19 +118,30 @@ class IOQueue:
             # print('poll', s, sm, ev)
             if ev & nPOLLOUT and sm[0] is not None:
                 # POLLIN or error
+                #print('wait_io_event', 'POLLIN')
                 _task_queue.push(sm[0])
-                sm[0] = None
+                sm[0].last_io = (s, 0)
+                self.unregister(s, 0, False)
             if ev & nPOLLIN and sm[1] is not None:
                 # POLLOUT or error
                 _task_queue.push(sm[1])
-                sm[1] = None
-            if sm[0] is None and sm[1] is None:
-                self._dequeue(s)
-            elif sm[0] is None:
-                self.poller.modify(s, POLLOUT)
-            else:
-                self.poller.modify(s, POLLIN)
+                #print('wait_io_event', 'POLLOUT')
+                sm[1].last_io = (s, 1)
+                self.unregister(s, 1, False)
 
+
+def wait_read(task, fp):
+    io = (fp, 0)
+    if task.last_io != io:
+        _io_queue._enqueue(fp, 0)
+    else:
+        _io_queue._rewait(fp, 0)
+        task.last_io = None
+
+    # else no need to re-register
+
+def suspend_read(fp):
+    return cur_task.suspend(wait_read, fp)
 
 ################################################################################
 # Main run loop
@@ -179,23 +188,48 @@ def run_until_complete(main_task=None):
             wait_io_event(dt)
 
         # Get next task to run and continue it
-        t = queue_pop()
-        cur_task = t
         try:
-            # Continue running the coroutine, it's responsible for rescheduling itself
-            exc = t.data
-            if not exc:
-                t.coro.send(None)
-            else:
-                # If the task is finished and on the run queue and gets here, then it
-                # had an exception and was not await'ed on.  Throwing into it now will
-                # raise StopIteration and the code below will catch this and run the
-                # call_exception_handler function.
-                t.data = None
-                t.coro.throw(exc)
+            now = ticks()
+            while True:
+                t = queue_pop()
+                cur_task = t
+
+                # Check if there is another task possibly ready on the queue.
+                # NOTE that this is done before the curren task is run in case it re-
+                # schedules itself to run immediately.
+                nt = queue_peek()
+
+                # Continue running the coroutine, it's responsible for rescheduling itself
+                # or issueing a suspend request.
+                exc = t.data
+                if not exc:
+                    trap = t.coro.send(None)
+                else:
+                    # If the task is finished and on the run queue and gets here, then it
+                    # had an exception and was not await'ed on.  Throwing into it now will
+                    # raise StopIteration and the code below will catch this and run the
+                    # call_exception_handler function.
+                    t.data = None
+                    trap = t.coro.throw(exc)
+
+                if trap:
+                    trap[0](t, trap[1])
+                elif t.last_io:
+                    _io_queue.unregister(*t.last_io)
+                    t.last_io = None
+
+                # Run other ready tasks
+                if not nt or ticks_diff(nt.ph_key, now) > 0:
+                    break
         except excs_all as er:
             # Check the task is not on any event queue
             assert t.data is None
+
+            # If task was waiting on IO, unregister it
+            if t.last_io:
+                _io_queue.unregister(*t.last_io)
+                t.last_io = None
+
             # This task is done, check if it's the main task and then loop should stop
             if t is main_task:
                 cur_task = None

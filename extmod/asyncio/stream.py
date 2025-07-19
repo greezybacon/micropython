@@ -24,7 +24,7 @@ class Stream:
     def read(self, n=-1):
         r = b""
         while True:
-            yield core._io_queue.queue_read(self.s)
+            yield from core.suspend_read(self.s)
             r2 = self.s.read(n)
             if r2 is not None:
                 if n >= 0:
@@ -35,14 +35,14 @@ class Stream:
 
     # async
     def readinto(self, buf):
-        yield core._io_queue.queue_read(self.s)
+        yield from core.suspend_read(self.s)
         return self.s.readinto(buf)
 
     # async
     def readexactly(self, n):
         r = b""
         while n:
-            yield core._io_queue.queue_read(self.s)
+            yield from core.suspend_read(self.s)
             r2 = self.s.read(n)
             if r2 is not None:
                 if not len(r2):
@@ -55,7 +55,7 @@ class Stream:
     def readline(self):
         l = b""
         while True:
-            yield core._io_queue.queue_read(self.s)
+            yield from core.suspend_read(self.s)
             l2 = self.s.readline()  # may do multiple reads but won't block
             if l2 is None:
                 continue
@@ -146,7 +146,7 @@ class Server:
         # Accept incoming connections
         while True:
             try:
-                yield core._io_queue.queue_read(s)
+                await core.suspend_read(s)
             except core.CancelledError as er:
                 # The server task was cancelled, shutdown server and close socket.
                 s.close()

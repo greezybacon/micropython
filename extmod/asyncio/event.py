@@ -59,7 +59,7 @@ try:
 
         async def wait(self):
             if not self.state:
-                yield core._io_queue.queue_read(self)
+                await core.suspend_read(self)
             self.state = 0
 
 except ImportError:

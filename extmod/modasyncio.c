@@ -47,6 +47,9 @@ typedef struct _mp_obj_task_t {
     mp_obj_t coro;
     mp_obj_t data;
     mp_obj_t state;
+    mp_obj_t suspend_req;
+    mp_obj_iter_buf_t suspend_buf;
+    mp_obj_t last_io;
     mp_obj_t ph_key;
 } mp_obj_task_t;
 
@@ -181,6 +184,10 @@ static mp_obj_t task_make_new(const mp_obj_type_t *type, size_t n_args, size_t n
     self->coro = args[0];
     self->data = mp_const_none;
     self->state = TASK_STATE_RUNNING_NOT_WAITED_ON;
+    self->suspend_req = mp_obj_new_tuple(1, (mp_obj_t[1]){
+        mp_obj_new_tuple(2, (mp_obj_t[2]){ mp_const_none, mp_const_none })
+    });
+    self->last_io = mp_const_none;
     self->ph_key = MP_OBJ_NEW_SMALL_INT(0);
     if (n_args == 2) {
         mp_asyncio_context = args[1];
@@ -239,6 +246,21 @@ static mp_obj_t task_cancel(mp_obj_t self_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(task_cancel_obj, task_cancel);
 
+static mp_obj_t task_suspend(size_t n_args, const mp_obj_t *args) {
+    mp_obj_task_t *self = MP_OBJ_TO_PTR(args[0]);
+    mp_obj_t *func = MP_OBJ_TO_PTR(args[1]);
+    mp_obj_t *arg = mp_const_none;
+    if (n_args == 3) {
+        arg = MP_OBJ_TO_PTR(args[2]);
+    }
+    mp_obj_tuple_t *suspend_req = (mp_obj_tuple_t *)self->suspend_req;
+    mp_obj_tuple_t *trap_inner = (mp_obj_tuple_t *)suspend_req->items[0];
+    trap_inner->items[0] = MP_OBJ_TO_PTR(func);
+    trap_inner->items[1] = MP_OBJ_TO_PTR(arg);
+    return mp_obj_tuple_getiter(self->suspend_req, &self->suspend_buf);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(task_suspend_obj, 2, 3, task_suspend);
+
 static void task_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest) {
     mp_obj_task_t *self = MP_OBJ_TO_PTR(self_in);
     if (dest[0] == MP_OBJ_NULL) {
@@ -257,6 +279,11 @@ static void task_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest) {
             dest[1] = self_in;
         } else if (attr == MP_QSTR_ph_key) {
             dest[0] = self->ph_key;
+        } else if (attr == MP_QSTR_suspend) {
+            dest[0] = MP_OBJ_FROM_PTR(&task_suspend_obj);
+            dest[1] = self_in;
+        } else if (attr == MP_QSTR_last_io) {
+            dest[0] = self->last_io;
         }
     } else if (dest[1] != MP_OBJ_NULL) {
         // Store
@@ -265,6 +292,9 @@ static void task_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest) {
             dest[0] = MP_OBJ_NULL;
         } else if (attr == MP_QSTR_state) {
             self->state = dest[1];
+            dest[0] = MP_OBJ_NULL;
+        } else if (attr == MP_QSTR_last_io) {
+            self->last_io = dest[1];
             dest[0] = MP_OBJ_NULL;
         }
     }
